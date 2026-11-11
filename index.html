@@ -1,0 +1,274 @@
+
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>TOLLBYTHIENTRAN HEX EDITOR</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:#080d18;color:#eaf2ff;font-family:Arial,sans-serif;padding:18px}
+header{font-size:22px;font-weight:900;letter-spacing:2px;color:#65e7f4;margin-bottom:20px}
+.panel{background:#111b2d;border:1px solid #283957;border-radius:14px;padding:15px;margin-bottom:15px}
+button,input{background:#1c2b43;color:white;border:1px solid #344967;padding:10px;border-radius:8px;margin:3px}
+button{cursor:pointer}
+button:hover{border-color:#65e7f4}
+.primary{background:linear-gradient(90deg,#56dce9,#9d83ff);color:#07101b;font-weight:bold}
+input[type=text]{min-width:100px}
+.toolbar{display:flex;flex-wrap:wrap;gap:5px}
+#hex{font:13px/2 monospace;white-space:pre;overflow:auto;max-height:65vh}
+.line{display:flex;gap:15px;min-width:680px}
+.offset{color:#758ba9}
+.bytes{color:#68dce9}
+.ascii{color:#c2aaff}
+.byte{cursor:pointer;padding:2px;border-radius:3px}
+.byte.selected{background:#a58bff;color:#080d18}
+label{font-size:12px;color:#9cacc4}
+#status{color:#65e7f4;font-size:12px;margin-top:10px}
+</style>
+</head>
+<body>
+<header>TOLLBYTHIENTRAN <small>HEX EDITOR</small></header>
+
+<div class="panel">
+  <h3>IMPORT FILE</h3>
+  <input type="file" id="file">
+  <div id="info">Chưa có file</div>
+</div>
+
+<div class="panel">
+  <h3>BYTE EDITOR</h3>
+  <div class="toolbar">
+    <input id="hexInput" placeholder="HEX: FF">
+    <button class="primary" onclick="editByte()">Apply byte</button>
+    <input id="asciiInput" placeholder="ASCII">
+    <button onclick="editAscii()">Apply ASCII</button>
+  </div>
+  <p>Selected offset: <b id="selected">None</b></p>
+</div>
+
+<div class="panel">
+  <h3>SEARCH & REPLACE</h3>
+  <div class="toolbar">
+    <input id="search" placeholder="Find ASCII">
+    <input id="replace" placeholder="Replace with">
+    <button onclick="findText()">Find</button>
+    <button onclick="replaceText()">Replace all</button>
+  </div>
+</div>
+
+<div class="panel">
+  <h3>BYTE OPERATIONS</h3>
+  <div class="toolbar">
+    <input id="insert" placeholder="HEX bytes: AABBCC">
+    <button onclick="insertBytes()">Insert at offset</button>
+    <button onclick="deleteByte()">Delete selected byte</button>
+    <button onclick="undo()">Undo</button>
+    <button onclick="redo()">Redo</button>
+  </div>
+</div>
+
+<div class="panel">
+  <h3>HEX VIEW</h3>
+  <div class="toolbar">
+    <button onclick="previousPage()">Previous</button>
+    <button onclick="nextPage()">Next</button>
+    <input id="jump" placeholder="Offset">
+    <button onclick="jumpTo()">Go</button>
+  </div>
+  <div id="hex">Upload file to begin.</div>
+</div>
+
+<div class="panel">
+  <button class="primary" onclick="exportFile()">EXPORT MODIFIED FILE</button>
+  <div id="status">Ready</div>
+</div>
+
+<script>
+let data=null;
+let selected=0;
+let page=0;
+const PAGE_SIZE=256;
+let undoStack=[];
+let redoStack=[];
+
+const $=id=>document.getElementById(id);
+
+function snapshot(){
+ if(!data)return;
+ undoStack.push(data.slice());
+ if(undoStack.length>50)undoStack.shift();
+ redoStack=[];
+}
+
+function setStatus(s){$('status').textContent=s}
+
+$('file').addEventListener('change',async e=>{
+ const f=e.target.files[0];
+ if(!f)return;
+ data=new Uint8Array(await f.arrayBuffer());
+ selected=0;page=0;
+ undoStack=[];redoStack=[];
+ $('info').textContent=f.name+' | '+data.length+' bytes';
+ render();
+ setStatus('File loaded');
+});
+
+function render(){
+ if(!data)return;
+ const start=page*PAGE_SIZE;
+ const end=Math.min(start+PAGE_SIZE,data.length);
+ let html='';
+ for(let i=start;i<end;i+=16){
+  const chunk=data.slice(i,Math.min(i+16,end));
+  let hex='',ascii='';
+  chunk.forEach((b,j)=>{
+   const pos=i+j;
+   hex+=`<span class="byte ${pos===selected?'selected':''}" onclick="selectByte(${pos})">${b.toString(16).padStart(2,'0').toUpperCase()}</span> `;
+   ascii+=b>=32&&b<=126?String.fromCharCode(b):'.';
+  });
+  html+=`<div class="line">
+   <span class="offset">${i.toString(16).padStart(8,'0').toUpperCase()}</span>
+   <span class="bytes">${hex}</span>
+   <span class="ascii">${escapeHtml(ascii)}</span>
+  </div>`;
+ }
+ $('hex').innerHTML=html||'Empty file';
+ $('selected').textContent='0x'+selected.toString(16).toUpperCase();
+}
+
+function escapeHtml(s){
+ return s.replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+function selectByte(i){
+ selected=i;
+ $('hexInput').value=data[i].toString(16).padStart(2,'0').toUpperCase();
+ $('asciiInput').value=data[i]>=32&&data[i]<=126?String.fromCharCode(data[i]):'';
+ render();
+}
+
+function editByte(){
+ if(!data||selected>=data.length)return;
+ const s=$('hexInput').value.trim();
+ if(!/^[0-9a-fA-F]{2}$/.test(s)){setStatus('Enter exactly 2 HEX digits');return}
+ snapshot();
+ data[selected]=parseInt(s,16);
+ render();setStatus('Byte modified');
+}
+
+function editAscii(){
+ if(!data||selected>=data.length)return;
+ const s=$('asciiInput').value;
+ if(s.length!==1){setStatus('Enter exactly one ASCII character');return}
+ snapshot();
+ data[selected]=s.charCodeAt(0);
+ render();setStatus('ASCII byte modified');
+}
+
+function hexBytes(s){
+ const clean=s.replace(/\s+/g,'');
+ if(clean.length%2||!/^[0-9a-fA-F]*$/.test(clean))throw Error('Invalid HEX sequence');
+ return Uint8Array.from(clean.match(/.{2}/g)||[],x=>parseInt(x,16));
+}
+
+function insertBytes(){
+ if(!data)return;
+ try{
+  const added=hexBytes($('insert').value);
+  if(!added.length)return;
+  snapshot();
+  const pos=Math.min(selected,data.length);
+  const out=new Uint8Array(data.length+added.length);
+  out.set(data.slice(0,pos));
+  out.set(added,pos);
+  out.set(data.slice(pos),pos+added.length);
+  data=out;selected=pos;page=Math.floor(pos/PAGE_SIZE);
+  render();setStatus('Bytes inserted');
+ }catch(e){setStatus(e.message)}
+}
+
+function deleteByte(){
+ if(!data||selected>=data.length)return;
+ snapshot();
+ const out=new Uint8Array(data.length-1);
+ out.set(data.slice(0,selected));
+ out.set(data.slice(selected+1),selected);
+ data=out;
+ selected=Math.min(selected,Math.max(0,data.length-1));
+ render();setStatus('Byte deleted');
+}
+
+function findText(){
+ if(!data)return;
+ const q=new TextEncoder().encode($('search').value);
+ if(!q.length)return;
+ let found=-1;
+ outer:for(let i=0;i<=data.length-q.length;i++){
+  for(let j=0;j<q.length;j++)if(data[i+j]!==q[j])continue outer;
+  found=i;break;
+ }
+ if(found<0){setStatus('No match');return}
+ selected=found;page=Math.floor(found/PAGE_SIZE);
+ render();setStatus('Found at offset 0x'+found.toString(16));
+}
+
+function replaceText(){
+ if(!data)return;
+ const q=new TextEncoder().encode($('search').value);
+ const r=new TextEncoder().encode($('replace').value);
+ if(!q.length||q.length!==r.length){
+  setStatus('Search and replacement must have equal byte lengths');return;
+ }
+ const hits=[];
+ outer:for(let i=0;i<=data.length-q.length;i++){
+  for(let j=0;j<q.length;j++)if(data[i+j]!==q[j])continue outer;
+  hits.push(i);i+=q.length-1;
+ }
+ if(!hits.length){setStatus('No matches');return}
+ snapshot();
+ hits.forEach(i=>data.set(r,i));
+ selected=hits[0];page=Math.floor(selected/PAGE_SIZE);
+ render();setStatus(hits.length+' matches replaced');
+}
+
+function undo(){
+ if(!undoStack.length)return;
+ redoStack.push(data.slice());
+ data=undoStack.pop();
+ selected=Math.min(selected,Math.max(0,data.length-1));
+ page=Math.floor(selected/PAGE_SIZE);
+ render();setStatus('Undo');
+}
+
+function redo(){
+ if(!redoStack.length)return;
+ undoStack.push(data.slice());
+ data=redoStack.pop();
+ selected=Math.min(selected,Math.max(0,data.length-1));
+ page=Math.floor(selected/PAGE_SIZE);
+ render();setStatus('Redo');
+}
+
+function previousPage(){page=Math.max(0,page-1);render()}
+function nextPage(){if(data)page=Math.min(Math.ceil(data.length/PAGE_SIZE)-1,page+1);render()}
+function jumpTo(){
+ if(!data)return;
+ let v=$('jump').value.trim();
+ let n=v.toLowerCase().startsWith('0x')?parseInt(v,16):Number(v);
+ if(!Number.isInteger(n)||n<0||n>=data.length){setStatus('Invalid offset');return}
+ selected=n;page=Math.floor(n/PAGE_SIZE);render();
+}
+function exportFile(){
+ if(!data)return;
+ const blob=new Blob([data],{type:'application/octet-stream'});
+ const a=document.createElement('a');
+ a.href=URL.createObjectURL(blob);
+ a.download='TOLLBYTHIENTRAN_edited.bin';
+ a.click();
+ URL.revokeObjectURL(a.href);
+ setStatus('Export complete');
+}
+</script>
+</body>
+</html>
